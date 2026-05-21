@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { diffWords } from "diff";
 import type { Change } from "diff";
 import type { Case, CorrectionType, OriginalCandidate } from "@/types/case";
@@ -203,10 +204,45 @@ interface Props {
   todayStr: string;
 }
 
+type CollectState = "idle" | "running" | "done" | "error";
+
 export function CaseExplorer({ cases, todayStr }: Props) {
+  const router = useRouter();
   const [activeFilter, setActiveFilter] = useState<CorrectionType | "전체">("전체");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [periodDays, setPeriodDays] = useState<number>(30);
+  const [collectState, setCollectState] = useState<CollectState>("idle");
+  const [collectLog, setCollectLog] = useState("");
+
+  async function handleCollect() {
+    setCollectState("running");
+    setCollectLog("수집 시작...");
+    try {
+      const res = await fetch("/api/collect", { method: "POST" });
+      if (!res.body) throw new Error("응답 없음");
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let finished = false;
+      while (!finished) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        for (const raw of chunk.split("\n")) {
+          if (!raw.startsWith("data: ")) continue;
+          try {
+            const { line } = JSON.parse(raw.slice(6)) as { line: string };
+            if (line === "__DONE__") { finished = true; setCollectState("done"); break; }
+            if (line.startsWith("__ERROR__:")) { finished = true; setCollectState("error"); setCollectLog(line.slice(10).trim()); break; }
+            if (line) setCollectLog(line);
+          } catch { /* ignore parse errors */ }
+        }
+      }
+      if (!finished) setCollectState("done");
+    } catch (e) {
+      setCollectState("error");
+      setCollectLog(e instanceof Error ? e.message : "오류 발생");
+    }
+  }
 
   // 기간 필터 적용
   const periodFiltered = useMemo(() => {
@@ -260,9 +296,33 @@ export function CaseExplorer({ cases, todayStr }: Props) {
           <h1 className="text-base font-bold text-gray-900">네이버 뉴스 정정·고침 비교기</h1>
           <p className="text-xs text-gray-400">정정문과 원본 기사를 나란히 비교합니다</p>
         </div>
-        <span className="text-xs text-gray-400 hidden sm:block">
-          {cutoffStr} ~ {todayStr}
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-gray-400 hidden sm:block">
+            {cutoffStr} ~ {todayStr}
+          </span>
+          <button
+            onClick={handleCollect}
+            disabled={collectState === "running"}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-900 text-white hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {collectState === "running" ? (
+              <>
+                <svg className="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                </svg>
+                수집 중…
+              </>
+            ) : (
+              <>
+                <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <path d="M4 4v5h5M20 20v-5h-5M4.07 15a8 8 0 1014-7.93" strokeLinecap="round"/>
+                </svg>
+                수집하기
+              </>
+            )}
+          </button>
+        </div>
       </header>
 
       {/* 필터 바 */}
@@ -360,6 +420,39 @@ export function CaseExplorer({ cases, todayStr }: Props) {
           )}
         </div>
       </div>
+
+      {/* 수집 진행 배너 */}
+      {collectState !== "idle" && (
+        <div className={`flex-shrink-0 flex items-center gap-3 px-4 py-2.5 border-t text-sm ${
+          collectState === "error"   ? "bg-red-50 border-red-200 text-red-700" :
+          collectState === "done"    ? "bg-green-50 border-green-200 text-green-700" :
+          "bg-gray-50 border-gray-200 text-gray-600"
+        }`}>
+          {collectState === "running" && (
+            <svg className="animate-spin w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+            </svg>
+          )}
+          {collectState === "done"  && <span className="flex-shrink-0">✓</span>}
+          {collectState === "error" && <span className="flex-shrink-0">✕</span>}
+          <span className="flex-1 truncate text-xs font-mono">{collectLog}</span>
+          {collectState === "done" && (
+            <button
+              onClick={() => { router.refresh(); setCollectState("idle"); }}
+              className="flex-shrink-0 px-2.5 py-1 rounded bg-green-700 text-white text-xs hover:bg-green-800 transition-colors"
+            >
+              새로고침
+            </button>
+          )}
+          <button
+            onClick={() => setCollectState("idle")}
+            className="flex-shrink-0 text-gray-400 hover:text-gray-600 text-lg leading-none px-1"
+          >
+            ×
+          </button>
+        </div>
+      )}
     </div>
   );
 }
