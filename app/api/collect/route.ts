@@ -1,4 +1,5 @@
 import { spawn } from "child_process";
+import { join } from "path";
 
 export const runtime = "nodejs";
 export const maxDuration = 300; // Vercel Pro; Hobby는 10s에서 timeout됨
@@ -13,7 +14,9 @@ export async function POST() {
           encoder.encode(`data: ${JSON.stringify({ line })}\n\n`)
         );
 
-      const child = spawn("node", ["scripts/collect.mjs"], {
+      // join()으로 런타임에 경로를 구성해 Turbopack 정적 분석 회피
+      const scriptPath = join(process.cwd(), "scripts", "collect.mjs");
+      const child = spawn("node", [scriptPath], {
         cwd: process.cwd(),
         env: { ...process.env },
       });
