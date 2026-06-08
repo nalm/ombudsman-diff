@@ -424,10 +424,15 @@ async function fetchArticleBody(url) {
 // ─── 메인 ─────────────────────────────────────────────────────────────────────
 
 async function main() {
-  const casesPath = join(ROOT, "data", "cases.json");
-  const existing = existsSync(casesPath)
-    ? JSON.parse(readFileSync(casesPath, "utf-8"))
-    : [];
+  const isVercel = !!process.env.VERCEL;
+  const casesPath = isVercel ? "/tmp/cases.json" : join(ROOT, "data", "cases.json");
+
+  // Vercel /tmp이 비어 있을 경우 번들된 data/cases.json 폴백
+  let existing = [];
+  try { existing = JSON.parse(readFileSync(casesPath, "utf-8")); } catch {}
+  if (!existing.length && isVercel) {
+    try { existing = JSON.parse(readFileSync(join(ROOT, "data", "cases.json"), "utf-8")); } catch {}
+  }
   const prevByUrl = new Map(existing.map((c) => [c.correction.url, c]));
 
   console.log(`\n수집 기간: ${cutoffStr} ~ ${todayStr} (최근 ${COLLECTION_DAYS}일)`);
@@ -520,7 +525,7 @@ async function main() {
   writeFileSync(casesPath, JSON.stringify(cases, null, 2), "utf-8");
 
   const withCandidates = cases.filter((c) => c.original_candidates.length > 0).length;
-  console.log(`\n✓ data/cases.json 저장 완료 (${cases.length}건)`);
+  console.log(`\n✓ ${casesPath} 저장 완료 (${cases.length}건)`);
   console.log(`  원본 후보 있음: ${withCandidates}건 / 없음: ${cases.length - withCandidates}건`);
 }
 

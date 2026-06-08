@@ -1,7 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useMemo, useEffect } from "react";
 import { diffWords } from "diff";
 import type { Change } from "diff";
 import type { Case, CorrectionType, OriginalCandidate } from "@/types/case";
@@ -207,12 +206,23 @@ interface Props {
 type CollectState = "idle" | "running" | "done" | "error";
 
 export function CaseExplorer({ cases, todayStr }: Props) {
-  const router = useRouter();
   const [activeFilter, setActiveFilter] = useState<CorrectionType | "전체">("전체");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [periodDays, setPeriodDays] = useState<number>(30);
   const [collectState, setCollectState] = useState<CollectState>("idle");
   const [collectLog, setCollectLog] = useState("");
+  const [liveCases, setLiveCases] = useState<Case[] | null>(null);
+
+  // localStorage에서 이전 수집 데이터 복원
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("ombudsman_cases_v1");
+      if (raw) {
+        const { cases: cached } = JSON.parse(raw) as { cases: Case[] };
+        if (Array.isArray(cached) && cached.length) setLiveCases(cached);
+      }
+    } catch {}
+  }, []);
 
   async function handleCollect() {
     setCollectState("running");
@@ -222,17 +232,30 @@ export function CaseExplorer({ cases, todayStr }: Props) {
       if (!res.body) throw new Error("응답 없음");
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
+      let buf = "";
       let finished = false;
       while (!finished) {
         const { done, value } = await reader.read();
         if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        for (const raw of chunk.split("\n")) {
-          if (!raw.startsWith("data: ")) continue;
+        buf += decoder.decode(value, { stream: true });
+        // SSE 이벤트는 빈 줄(\n\n)로 구분 — 대용량 이벤트 청크 분할 대응
+        const parts = buf.split("\n\n");
+        buf = parts.pop() ?? "";
+        for (const event of parts) {
+          const dataLine = event.split("\n").find((l) => l.startsWith("data: "));
+          if (!dataLine) continue;
           try {
-            const { line } = JSON.parse(raw.slice(6)) as { line: string };
+            const { line } = JSON.parse(dataLine.slice(6)) as { line: string };
             if (line === "__DONE__") { finished = true; setCollectState("done"); break; }
             if (line.startsWith("__ERROR__:")) { finished = true; setCollectState("error"); setCollectLog(line.slice(10).trim()); break; }
+            if (line.startsWith("__CASES__:")) {
+              try {
+                const newCases = JSON.parse(line.slice(10)) as Case[];
+                setLiveCases(newCases);
+                localStorage.setItem("ombudsman_cases_v1", JSON.stringify({ cases: newCases }));
+              } catch { /* JSON 파싱 실패 무시 */ }
+              continue; // 로그에는 표시하지 않음
+            }
             if (line) setCollectLog(line);
           } catch { /* ignore parse errors */ }
         }
@@ -244,21 +267,24 @@ export function CaseExplorer({ cases, todayStr }: Props) {
     }
   }
 
+  // 수집된 liveCases 우선, 없으면 서버 props의 cases 사용
+  const displayCases = liveCases ?? cases;
+
   // 기간 필터 적용
   const periodFiltered = useMemo(() => {
-    if (periodDays === 0) return cases;
+    if (periodDays === 0) return displayCases;
     const d = new Date(todayStr);
     d.setDate(d.getDate() - periodDays);
     const cutoff = d.toISOString().slice(0, 10);
-    return cases.filter((c) => c.correction.date >= cutoff);
-  }, [cases, todayStr, periodDays]);
+    return displayCases.filter((c) => c.correction.date >= cutoff);
+  }, [displayCases, todayStr, periodDays]);
 
   const cutoffStr = useMemo(() => {
-    if (periodDays === 0) return cases.at(-1)?.correction.date ?? "";
+    if (periodDays === 0) return displayCases.at(-1)?.correction.date ?? "";
     const d = new Date(todayStr);
     d.setDate(d.getDate() - periodDays);
     return d.toISOString().slice(0, 10);
-  }, [cases, todayStr, periodDays]);
+  }, [displayCases, todayStr, periodDays]);
 
   const typeCounts = useMemo(() => {
     const map: Record<string, number> = {};
@@ -271,7 +297,7 @@ export function CaseExplorer({ cases, todayStr }: Props) {
     [periodFiltered, activeFilter]
   );
 
-  const selected = useMemo(() => cases.find((c) => c.id === selectedId) ?? null, [cases, selectedId]);
+  const selected = useMemo(() => displayCases.find((c) => c.id === selectedId) ?? null, [displayCases, selectedId]);
 
   function handleSelect(id: string) {
     setSelectedId(id);
@@ -299,6 +325,7 @@ export function CaseExplorer({ cases, todayStr }: Props) {
         <div className="flex items-center gap-3">
           <span className="text-xs text-gray-400 hidden sm:block">
             {cutoffStr} ~ {todayStr}
+            {liveCases && <span className="ml-1.5 text-green-600 font-medium">↻ 최신</span>}
           </span>
           <button
             onClick={handleCollect}
@@ -439,10 +466,10 @@ export function CaseExplorer({ cases, todayStr }: Props) {
           <span className="flex-1 truncate text-xs font-mono">{collectLog}</span>
           {collectState === "done" && (
             <button
-              onClick={() => { router.refresh(); setCollectState("idle"); }}
+              onClick={() => setCollectState("idle")}
               className="flex-shrink-0 px-2.5 py-1 rounded bg-green-700 text-white text-xs hover:bg-green-800 transition-colors"
             >
-              새로고침
+              확인
             </button>
           )}
           <button

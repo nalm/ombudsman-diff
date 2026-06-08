@@ -1,5 +1,6 @@
 import { spawn } from "child_process";
 import { join } from "path";
+import { readFile } from "fs/promises";
 
 export const runtime = "nodejs";
 export const maxDuration = 300; // Vercel Pro; Hobby는 10s에서 timeout됨
@@ -31,8 +32,20 @@ export async function POST() {
         send("[ERR] " + buf.toString().trim());
       });
 
-      child.on("close", (code: number | null) => {
-        send(code === 0 ? "__DONE__" : `__ERROR__: 종료 코드 ${code}`);
+      child.on("close", async (code: number | null) => {
+        if (code === 0) {
+          // 수집 결과를 클라이언트에 스트리밍 (Vercel 파일시스템 우회)
+          try {
+            const outPath = process.env.VERCEL
+              ? "/tmp/cases.json"
+              : join(process.cwd(), "data", "cases.json");
+            const json = await readFile(outPath, "utf-8");
+            send(`__CASES__:${json}`);
+          } catch { /* 무시 — 클라이언트 측 데이터 반영만 실패 */ }
+          send("__DONE__");
+        } else {
+          send(`__ERROR__: 종료 코드 ${code}`);
+        }
         controller.close();
       });
 
