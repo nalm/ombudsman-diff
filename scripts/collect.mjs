@@ -1,20 +1,24 @@
-﻿/**
+/**
  * 네이버 뉴스 옴부즈만 정정·고침 기사 수집 스크립트
- * 실행: node scripts/collect.mjs
+ * 실행: node scripts/collect.mjs  (프로젝트 루트에서)
  *
  * 1. 두 목록 페이지에서 최근 100일치 기사 수집
  * 2. 각 기사 본문에서 original_clue + 검색 키워드 추출
  * 3. 네이버 검색으로 원본 기사 후보 자동 탐색
  * 4. data/cases.json 저장 (기존 original_candidates 보존)
+ *
+ * API 라우트에서 import 시: collectData(log) 사용
  */
 
 import * as cheerio from "cheerio";
-import { readFileSync, writeFileSync, existsSync } from "fs";
-import { join, dirname } from "path";
+import { readFileSync, writeFileSync } from "fs";
+import { join } from "path";
 import { fileURLToPath } from "url";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const ROOT = join(__dirname, "..");
+// ROOT: process.cwd() 사용
+// - CLI: `node scripts/collect.mjs` 를 프로젝트 루트에서 실행 가정
+// - API 라우트: Next.js가 process.cwd()를 프로젝트 루트로 설정
+const ROOT = process.cwd();
 
 const HEADERS = {
   "User-Agent":
@@ -66,25 +70,18 @@ function detectType(title) {
 
 // ─── 본문 파싱 ────────────────────────────────────────────────────────────────
 
-/**
- * 본문에서 원본 기사 날짜·키워드·clue를 추출한다.
- * @returns {{ refDate: string|null, keywords: string, clue: string }}
- */
 function parseBody(body, correctionDateStr) {
   const corrYear = parseInt(correctionDateStr.slice(0, 4));
   const corrMonth = parseInt(correctionDateStr.slice(5, 7));
 
-  // ── 날짜 추출 (우선순위 순) ────────────────────────────────────────────────
   let refDate = null;
 
-  // P1: "지난 YYYY년 N월 N일" — 연도 명시 + 지난 접두
   const recentFullRe = /지난\s*(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일/;
   const rf = body.match(recentFullRe);
   if (rf) {
     refDate = `${rf[1]}-${rf[2].padStart(2, "0")}-${rf[3].padStart(2, "0")}`;
   }
 
-  // P2: "YYYY년 N월 N일자" — 자 suffix = 신문 발행일 표기
   if (!refDate) {
     const fullPubRe = /(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일자/;
     const fp = body.match(fullPubRe);
@@ -93,7 +90,6 @@ function parseBody(body, correctionDateStr) {
     }
   }
 
-  // P3: "지난해/작년 N월 N일" — corrYear - 1 적용
   if (!refDate) {
     const lastYearRe = /(?:지난해|작년)\s*(\d{1,2})월\s*(\d{1,2})일/;
     const ly = body.match(lastYearRe);
@@ -103,7 +99,6 @@ function parseBody(body, correctionDateStr) {
     }
   }
 
-  // P4: "N월 N일자" — 자 suffix + 연도 없는 경우
   if (!refDate) {
     const partPubRe = /(\d{1,2})월\s*(\d{1,2})일자/;
     const pp = body.match(partPubRe);
@@ -114,7 +109,6 @@ function parseBody(body, correctionDateStr) {
     }
   }
 
-  // P5: "지난 N월 N일" — 연도 없는 지난 접두
   if (!refDate) {
     const recentPartRe = /지난\s*(\d{1,2})월\s*(\d{1,2})일/;
     const rp = body.match(recentPartRe);
@@ -125,7 +119,6 @@ function parseBody(body, correctionDateStr) {
     }
   }
 
-  // P6: "YYYY년 N월 N일" — 가장 넓은 패턴 (마지막 수단)
   if (!refDate) {
     const fullDateRe = /(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일/;
     const fd = body.match(fullDateRe);
@@ -134,7 +127,6 @@ function parseBody(body, correctionDateStr) {
     }
   }
 
-  // P7: "▲N월 N일" or loose "N월 N일"
   if (!refDate) {
     const partRe = /[▲]\s*(\d{1,2})월\s*(\d{1,2})일/;
     const pm = body.match(partRe);
@@ -145,10 +137,8 @@ function parseBody(body, correctionDateStr) {
     }
   }
 
-  // 날짜 유효성 검증
   if (refDate && isNaN(new Date(refDate).getTime())) refDate = null;
 
-  // ── 제목 키워드 추출 ────────────────────────────────────────────────────────
   const titleRe = [
     /[「《＜〈<]([^」》＞〉>\n]{5,80})[」》＞〉>]/,
     /'([^'\n]{5,80})'/,
@@ -170,7 +160,6 @@ function parseBody(body, correctionDateStr) {
     }
   }
 
-  // ── clue 문자열 생성 ────────────────────────────────────────────────────────
   let clue = "";
   if (refDate && titleKeywords) {
     const d = new Date(refDate);
@@ -185,10 +174,6 @@ function parseBody(body, correctionDateStr) {
   return { refDate, keywords: titleKeywords, clue };
 }
 
-/**
- * 정정문 제목에서 원본 기사 키워드를 추출한다.
- * "[반론보도] <원본 제목> 관련" 같은 패턴 처리
- */
 function extractKeywordsFromCorrectionTitle(correctionTitle) {
   const titleRe = [
     /[「《＜〈<]([^」》＞〉>\n]{5,80})[」》＞〉>]/,
@@ -213,14 +198,12 @@ function extractKeywordsFromCorrectionTitle(correctionTitle) {
 // ─── 네이버 검색 ─────────────────────────────────────────────────────────────
 
 function fmtDate8(dateStr) {
-  // "2026-05-12" → "20260512"
   return dateStr.replace(/-/g, "");
 }
 
 function buildDateRange(refDate, corrDate) {
   const base = refDate || corrDate;
   const d = new Date(base);
-  // invalid date → corrDate 기준 ±14일로 폴백
   if (isNaN(d.getTime())) return buildDateRange(null, corrDate);
   const from = new Date(d); from.setDate(d.getDate() - 10);
   const to = new Date(d);   to.setDate(d.getDate() + 3);
@@ -259,20 +242,17 @@ async function getArticleInfo(url) {
   const html = await fetchHtml(url);
   const $ = cheerio.load(html);
 
-  // 제목: <title> 태그에서 추출
   const rawTitle = $("title").first().text().trim();
   const title = rawTitle
     .replace(/\s*[:\-|]\s*네이버\s*뉴스.*$/i, "")
     .replace(/\s*:\s*$/, "")
     .trim();
 
-  // 날짜: data-date-time 속성
   const dateTimeAttr = $("._ARTICLE_DATE_TIME, .media_end_head_info_datestamp_time")
     .first()
     .attr("data-date-time");
   const date = dateTimeAttr ? dateTimeAttr.slice(0, 10) : "";
 
-  // 스니펫: 본문 앞부분
   $("script, style").remove();
   $("#dic_area br").replaceWith("\n");
   const snippet = $("#dic_area")
@@ -286,7 +266,6 @@ async function getArticleInfo(url) {
 }
 
 async function searchOriginals(correctionUrl, body, correctionDate, fallbackKeywords = "") {
-  // 정정 기사 URL에서 언론사 코드 추출
   const pressMatch = correctionUrl.match(/\/article\/(\d+)\//);
   if (!pressMatch) return [];
   const pressCode = pressMatch[1];
@@ -297,11 +276,10 @@ async function searchOriginals(correctionUrl, body, correctionDate, fallbackKeyw
 
   const { start, end } = buildDateRange(refDate, correctionDate);
 
-  // 검색 시도 목록: [쿼리, 언론사 코드 필터 여부]
   const attempts = [
-    [keywords.slice(0, 60), true],                       // 원본 쿼리 + 같은 언론사
-    [keywords.split(/\s+/).slice(0, 4).join(" "), true],  // 단어 4개 이하 + 같은 언론사
-    [keywords.slice(0, 40), false],                       // 단축 쿼리 + 전체 검색
+    [keywords.slice(0, 60), true],
+    [keywords.split(/\s+/).slice(0, 4).join(" "), true],
+    [keywords.slice(0, 40), false],
   ];
 
   for (const [q, filterByPress] of attempts) {
@@ -313,7 +291,6 @@ async function searchOriginals(correctionUrl, body, correctionDate, fallbackKeyw
     const html = await fetchHtml(searchUrl);
     await sleep(DELAY_MS);
 
-    // 언론사 코드 패턴으로 기사 URL 추출
     const urlRe = filterByPress
       ? new RegExp(`n\\.news\\.naver\\.com/mnews/article/${pressCode}/(\\d+)`, "g")
       : /n\.news\.naver\.com\/mnews\/article\/(\d+)\/(\d+)/g;
@@ -372,11 +349,17 @@ async function fetchHtml(url) {
   return res.text();
 }
 
-async function collectListPage(baseUrl, label) {
+/**
+ * 목록 페이지에서 기사 항목을 수집한다.
+ * @param {string} baseUrl
+ * @param {string} label
+ * @param {(line: string) => void} log
+ */
+async function collectListPage(baseUrl, label, log) {
   const items = [];
   let page = 1;
   while (true) {
-    process.stdout.write(`  ${label} p.${page}...\r`);
+    log(`  ${label} p.${page}...`);
     const html = await fetchHtml(`${baseUrl}?page=${page}`);
     const $ = cheerio.load(html);
     let foundOld = false;
@@ -400,11 +383,14 @@ async function collectListPage(baseUrl, label) {
     page++;
     await sleep(DELAY_MS);
   }
-  process.stdout.write("".padEnd(50, " ") + "\r");
   return items;
 }
 
-async function fetchArticleBody(url) {
+/**
+ * @param {string} url
+ * @param {(line: string) => void} log
+ */
+async function fetchArticleBody(url, log) {
   try {
     const html = await fetchHtml(url);
     const $ = cheerio.load(html);
@@ -416,14 +402,21 @@ async function fetchArticleBody(url) {
       .replace(/\n{3,}/g, "\n\n")
       .trim();
   } catch (e) {
-    process.stderr.write(`  ⚠ 본문 실패: ${url}\n`);
+    log(`⚠ 본문 실패: ${url}`);
     return "";
   }
 }
 
-// ─── 메인 ─────────────────────────────────────────────────────────────────────
+// ─── 메인 (export) ────────────────────────────────────────────────────────────
 
-async function main() {
+/**
+ * 데이터 수집 실행. 진행 상황을 log 콜백으로 전달하고 cases 배열을 반환한다.
+ * API 라우트에서 import하여 사용하거나, CLI 엔트리 포인트에서 호출한다.
+ *
+ * @param {(line: string) => void} [log] - 진행 메시지 콜백 (기본: stdout)
+ * @returns {Promise<object[]>} 수집된 케이스 배열
+ */
+export async function collectData(log = (line) => process.stdout.write(line + "\n")) {
   const isVercel = !!process.env.VERCEL;
   const casesPath = isVercel ? "/tmp/cases.json" : join(ROOT, "data", "cases.json");
 
@@ -435,71 +428,64 @@ async function main() {
   }
   const prevByUrl = new Map(existing.map((c) => [c.correction.url, c]));
 
-  console.log(`\n수집 기간: ${cutoffStr} ~ ${todayStr} (최근 ${COLLECTION_DAYS}일)`);
-  console.log("=".repeat(60));
+  log(`수집 기간: ${cutoffStr} ~ ${todayStr} (최근 ${COLLECTION_DAYS}일)`);
+  log("=".repeat(60));
 
-  console.log("\n[1/2] 고침·바로잡습니다 목록");
+  log("[1/2] 고침·바로잡습니다 목록");
   const errorList = await collectListPage(
-    "https://news.naver.com/ombudsman/errorArticleList", "고침"
+    "https://news.naver.com/ombudsman/errorArticleList", "고침", log
   );
-  console.log(`  → ${errorList.length}건`);
+  log(`  → ${errorList.length}건`);
 
   await sleep(DELAY_MS * 2);
 
-  console.log("\n[2/2] 정정·반론·추후보도 목록");
+  log("[2/2] 정정·반론·추후보도 목록");
   const revisionList = await collectListPage(
-    "https://news.naver.com/ombudsman/revisionArticleList", "정정/반론"
+    "https://news.naver.com/ombudsman/revisionArticleList", "정정/반론", log
   );
-  console.log(`  → ${revisionList.length}건`);
+  log(`  → ${revisionList.length}건`);
 
   const seen = new Set();
   const allItems = [...errorList, ...revisionList]
     .filter((i) => { if (seen.has(i.url)) return false; seen.add(i.url); return true; })
     .sort((a, b) => b.date.localeCompare(a.date));
 
-  console.log(`\n총 ${allItems.length}건 — 본문 + 원본 검색 시작`);
-  console.log("=".repeat(60));
+  log(`총 ${allItems.length}건 — 본문 + 원본 검색 시작`);
+  log("=".repeat(60));
 
   const cases = [];
   const idCount = {};
 
   for (const [i, item] of allItems.entries()) {
     const prog = `[${String(i + 1).padStart(3, " ")}/${allItems.length}]`;
-    process.stdout.write(`${prog} ${item.date} ${item.publisher} — ${item.title.slice(0, 30)}\n`);
+    log(`${prog} ${item.date} ${item.publisher} — ${item.title.slice(0, 30)}`);
 
     const prev = prevByUrl.get(item.url);
 
-    // 본문 (기존 있으면 재사용)
     let body = prev?.correction?.body || "";
     if (!body) {
-      body = await fetchArticleBody(item.url);
+      body = await fetchArticleBody(item.url, log);
       await sleep(DELAY_MS);
     }
 
-    // 본문 파싱 (clue + 검색 키워드)
     const { clue, keywords: bodyKeywords } = parseBody(body, item.date);
-    // 본문에서 키워드 추출 실패 시 정정문 제목에서 폴백
     const keywords = bodyKeywords || extractKeywordsFromCorrectionTitle(item.title);
     const type = detectType(item.title);
 
-    // 원본 후보 검색 (기존에 수동으로 넣은 후보가 있으면 보존)
     let candidates = prev?.original_candidates ?? [];
     if (candidates.length === 0 && keywords) {
-      process.stdout.write(`       🔍 원본 검색 중...\r`);
+      log(`       🔍 원본 검색 중...`);
       try {
         candidates = await searchOriginals(item.url, body, item.date, keywords);
         await sleep(DELAY_MS);
       } catch (e) {
-        process.stderr.write(`  ⚠ 검색 실패: ${e.message}\n`);
+        log(`⚠ 검색 실패: ${e.message}`);
       }
       if (candidates.length) {
-        process.stdout.write(
-          `       → 후보 ${candidates.length}건 (${candidates.map((c) => c.confidence).join(", ")})\n`
-        );
+        log(`       → 후보 ${candidates.length}건 (${candidates.map((c) => c.confidence).join(", ")})`);
       }
     }
 
-    // ID 생성
     const pubSlug = slugify(item.publisher);
     const dateKey = `${item.date}-${pubSlug}`;
     idCount[dateKey] = (idCount[dateKey] || 0) + 1;
@@ -522,11 +508,26 @@ async function main() {
     });
   }
 
-  writeFileSync(casesPath, JSON.stringify(cases, null, 2), "utf-8");
-
   const withCandidates = cases.filter((c) => c.original_candidates.length > 0).length;
-  console.log(`\n✓ ${casesPath} 저장 완료 (${cases.length}건)`);
-  console.log(`  원본 후보 있음: ${withCandidates}건 / 없음: ${cases.length - withCandidates}건`);
+  log(`✓ ${cases.length}건 수집 완료`);
+  log(`  원본 후보 있음: ${withCandidates}건 / 없음: ${cases.length - withCandidates}건`);
+
+  return cases;
 }
 
-main().catch((e) => { console.error("수집 실패:", e); process.exit(1); });
+// ─── CLI 엔트리 포인트 ────────────────────────────────────────────────────────
+// webpack 번들 컨텍스트에서는 import.meta.url이 다르게 해석되므로 try/catch 사용
+
+let _isCLI = false;
+try { _isCLI = process.argv[1] === fileURLToPath(import.meta.url); } catch { /* webpack context */ }
+
+if (_isCLI) {
+  collectData()
+    .then((cases) => {
+      const isVercel = !!process.env.VERCEL;
+      const outPath = isVercel ? "/tmp/cases.json" : join(ROOT, "data", "cases.json");
+      writeFileSync(outPath, JSON.stringify(cases, null, 2), "utf-8");
+      process.stdout.write(`\n✓ ${outPath} 저장 완료 (${cases.length}건)\n`);
+    })
+    .catch((e) => { console.error("수집 실패:", e); process.exit(1); });
+}
