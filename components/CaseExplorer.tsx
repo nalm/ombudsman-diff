@@ -207,6 +207,7 @@ type CollectState = "idle" | "running" | "done" | "error";
 
 export function CaseExplorer({ cases, todayStr }: Props) {
   const [activeFilter, setActiveFilter] = useState<CorrectionType | "전체">("전체");
+  const [publisherFilter, setPublisherFilter] = useState<string>("전체");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [periodDays, setPeriodDays] = useState<number>(30);
   const [collectState, setCollectState] = useState<CollectState>("idle");
@@ -292,10 +293,19 @@ export function CaseExplorer({ cases, todayStr }: Props) {
     return map;
   }, [periodFiltered]);
 
-  const filtered = useMemo(
-    () => activeFilter === "전체" ? periodFiltered : periodFiltered.filter((c) => c.correction.type === activeFilter),
-    [periodFiltered, activeFilter]
-  );
+  // 기간 내 언론사 목록 (건수 내림차순)
+  const publisherOptions = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const c of periodFiltered) map[c.correction.publisher] = (map[c.correction.publisher] ?? 0) + 1;
+    return Object.entries(map).sort((a, b) => b[1] - a[1]);
+  }, [periodFiltered]);
+
+  const filtered = useMemo(() => {
+    let result = periodFiltered;
+    if (activeFilter !== "전체") result = result.filter((c) => c.correction.type === activeFilter);
+    if (publisherFilter !== "전체") result = result.filter((c) => c.correction.publisher === publisherFilter);
+    return result;
+  }, [periodFiltered, activeFilter, publisherFilter]);
 
   const selected = useMemo(() => displayCases.find((c) => c.id === selectedId) ?? null, [displayCases, selectedId]);
 
@@ -311,6 +321,7 @@ export function CaseExplorer({ cases, todayStr }: Props) {
   function handlePeriodChange(days: number) {
     setPeriodDays(days);
     setActiveFilter("전체");
+    setPublisherFilter("전체");
     setSelectedId(null);
   }
 
@@ -393,6 +404,25 @@ export function CaseExplorer({ cases, todayStr }: Props) {
             </button>
           ))}
         </div>
+
+        {/* 구분선 */}
+        <div className="flex-shrink-0 w-px h-4 bg-gray-200 mx-1" />
+
+        {/* 언론사 필터 */}
+        <select
+          value={publisherFilter}
+          onChange={(e) => { setPublisherFilter(e.target.value); setSelectedId(null); }}
+          className={`flex-shrink-0 text-xs rounded-full px-2.5 py-1 border outline-none cursor-pointer transition-colors appearance-none ${
+            publisherFilter !== "전체"
+              ? "bg-gray-900 text-white border-gray-900"
+              : "bg-gray-100 text-gray-600 border-transparent hover:bg-gray-200"
+          }`}
+        >
+          <option value="전체">언론사 전체</option>
+          {publisherOptions.map(([pub, count]) => (
+            <option key={pub} value={pub}>{pub} ({count})</option>
+          ))}
+        </select>
       </div>
 
       {/* 본문: 좌우 패널 */}
