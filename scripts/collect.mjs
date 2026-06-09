@@ -27,14 +27,20 @@ const HEADERS = {
 };
 
 const COLLECTION_DAYS = 90;
-const DELAY_MS = 450;
+const DELAY_MS = process.env.VERCEL ? 200 : 450; // Vercel: 딜레이 단축
 const MAX_CANDIDATES = 3;
+// Vercel에서는 최근 30일 항목만 본문·원본 검색 (타임아웃 방지)
+// 로컬에서는 COLLECTION_DAYS 전체 범위에 대해 상세 수집
+const DETAIL_FETCH_DAYS = process.env.VERCEL ? 30 : COLLECTION_DAYS;
 
 const today = new Date();
 const cutoff = new Date(today);
 cutoff.setDate(today.getDate() - COLLECTION_DAYS);
 const cutoffStr = cutoff.toISOString().slice(0, 10);
 const todayStr = today.toISOString().slice(0, 10);
+const detailCutoff = new Date(today);
+detailCutoff.setDate(today.getDate() - DETAIL_FETCH_DAYS);
+const detailCutoffStr = detailCutoff.toISOString().slice(0, 10);
 
 const PUBLISHER_SLUG = {
   조선일보: "chosun", 중앙일보: "joongang", 동아일보: "donga",
@@ -344,7 +350,8 @@ async function sleep(ms) {
 }
 
 async function fetchHtml(url) {
-  const res = await fetch(url, { headers: HEADERS });
+  // cache: "no-store" — Next.js inline import 시 fetch 캐시 우회
+  const res = await fetch(url, { headers: HEADERS, cache: "no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status}: ${url}`);
   return res.text();
 }
@@ -458,12 +465,14 @@ export async function collectData(log = (line) => process.stdout.write(line + "\
 
   for (const [i, item] of allItems.entries()) {
     const prog = `[${String(i + 1).padStart(3, " ")}/${allItems.length}]`;
-    log(`${prog} ${item.date} ${item.publisher} — ${item.title.slice(0, 30)}`);
+    // Vercel: DETAIL_FETCH_DAYS 이내 항목만 본문·원본 검색 수행 (타임아웃 방지)
+    const isRecent = item.date >= detailCutoffStr;
+    log(`${prog} ${item.date} ${item.publisher} — ${item.title.slice(0, 30)}${!isRecent ? " [목록만]" : ""}`);
 
     const prev = prevByUrl.get(item.url);
 
     let body = prev?.correction?.body || "";
-    if (!body) {
+    if (!body && isRecent) {
       body = await fetchArticleBody(item.url, log);
       await sleep(DELAY_MS);
     }
@@ -473,7 +482,7 @@ export async function collectData(log = (line) => process.stdout.write(line + "\
     const type = detectType(item.title);
 
     let candidates = prev?.original_candidates ?? [];
-    if (candidates.length === 0 && keywords) {
+    if (candidates.length === 0 && keywords && isRecent) {
       log(`       🔍 원본 검색 중...`);
       try {
         candidates = await searchOriginals(item.url, body, item.date, keywords);
