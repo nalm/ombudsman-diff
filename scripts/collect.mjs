@@ -26,7 +26,7 @@ const HEADERS = {
   "Accept-Language": "ko-KR,ko;q=0.9",
 };
 
-const COLLECTION_DAYS = 30;
+const COLLECTION_DAYS = 90;
 const DELAY_MS = 450;
 const MAX_CANDIDATES = 3;
 

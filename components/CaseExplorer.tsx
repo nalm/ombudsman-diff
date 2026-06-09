@@ -293,6 +293,19 @@ export function CaseExplorer({ cases, todayStr }: Props) {
     return map;
   }, [periodFiltered]);
 
+  // 각 기간 옵션별 해당 건수 (유형·언론사 필터 무관하게 전체 기준)
+  const periodCounts = useMemo(() => {
+    const result: Record<number, number> = {};
+    for (const { days } of PERIOD_OPTIONS) {
+      if (days === 0) { result[0] = displayCases.length; continue; }
+      const d = new Date(todayStr);
+      d.setDate(d.getDate() - days);
+      const cutoff = d.toISOString().slice(0, 10);
+      result[days] = displayCases.filter((c) => c.correction.date >= cutoff).length;
+    }
+    return result;
+  }, [displayCases, todayStr]);
+
   // 기간 내 언론사 목록 (건수 내림차순)
   const publisherOptions = useMemo(() => {
     const map: Record<string, number> = {};
@@ -320,9 +333,8 @@ export function CaseExplorer({ cases, todayStr }: Props) {
 
   function handlePeriodChange(days: number) {
     setPeriodDays(days);
-    setActiveFilter("전체");
-    setPublisherFilter("전체");
     setSelectedId(null);
+    // 유형·언론사 필터는 유지 — 기간만 바꿔도 선택이 초기화되면 UX 혼란
   }
 
   return (
@@ -394,13 +406,16 @@ export function CaseExplorer({ cases, todayStr }: Props) {
             <button
               key={days}
               onClick={() => handlePeriodChange(days)}
-              className={`px-2.5 py-0.5 rounded-full text-xs font-medium transition-colors ${
+              className={`flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium transition-colors ${
                 periodDays === days
                   ? "bg-white text-gray-900 shadow-sm"
                   : "text-gray-500 hover:text-gray-700"
               }`}
             >
               {label}
+              <span className={`text-xs ${periodDays === days ? "opacity-60" : "opacity-50"}`}>
+                {periodCounts[days]}
+              </span>
             </button>
           ))}
         </div>
